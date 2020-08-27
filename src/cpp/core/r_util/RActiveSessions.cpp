@@ -68,6 +68,7 @@ std::string ActiveSession::readProperty(const std::string& name) const
    }
 }
 
+// Start of ActiveSessions =============================================================================================
 Error ActiveSessions::create(const std::string& project,
                              const std::string& workingDir,
                              bool initial,
@@ -79,7 +80,7 @@ Error ActiveSessions::create(const std::string& project,
    while (id.empty())
    {
       std::string candidateId = core::r_util::generateScopeId();
-      dir = storagePath_.completeChildPath(kSessionDirPrefix + candidateId);
+      dir = getScratchPath(candidateId);
       if (!dir.exists())
          id = candidateId;
    }
@@ -104,30 +105,29 @@ Error ActiveSessions::create(const std::string& project,
 
 namespace {
 
-bool compareActivityLevel(boost::shared_ptr<ActiveSession> a,
-                          boost::shared_ptr<ActiveSession> b)
+bool compareActivityLevel(const ActiveSession& a, const ActiveSession& b)
 {
-   if (a->executing() == b->executing())
+   if (a.executing() == b.executing())
    {
-      if (a->running() == b->running())
+      if (a.running() == b.running())
       {
-         if (a->lastUsed() == b->lastUsed())
+         if (a.lastUsed() == b.lastUsed())
          {
-            return a->id() > b->id();
+            return a.id() > b.id();
          }
          else
          {
-            return a->lastUsed() > b->lastUsed();
+            return a.lastUsed() > b.lastUsed();
          }
       }
       else
       {
-         return a->running();
+         return a.running();
       }
    }
    else
    {
-      return a->executing();
+      return a.executing();
    }
 }
 
@@ -137,8 +137,9 @@ std::vector<boost::shared_ptr<ActiveSession> > ActiveSessions::list(
                                        const FilePath& userHomePath,
                                        bool projectSharingEnabled) const
 {
-   // list to return
-   std::vector<boost::shared_ptr<ActiveSession> > sessions;
+   // We need to create and sort a vector of stack-allocated ActiveSession objects because attempting to do this with
+   // any type of pointer leads to occasional segfaults under some circumstances.
+   std::vector<ActiveSession> sessions;
 
    // enumerate children and check for sessions
    std::vector<FilePath> children;
@@ -146,7 +147,7 @@ std::vector<boost::shared_ptr<ActiveSession> > ActiveSessions::list(
    if (error)
    {
       LOG_ERROR(error);
-      return sessions;
+      return std::vector<boost::shared_ptr<ActiveSession> >();
    }
    std::string prefix = kSessionDirPrefix;
    for (const FilePath& child : children)
@@ -154,12 +155,13 @@ std::vector<boost::shared_ptr<ActiveSession> > ActiveSessions::list(
       if (boost::algorithm::starts_with(child.getFilename(), prefix))
       {
          std::string id = child.getFilename().substr(prefix.length());
-         boost::shared_ptr<ActiveSession> pSession = get(id);
-         if (!pSession->empty())
+         FilePath scratchPath = getScratchPath(id);
+         ActiveSession session = scratchPath.exists() ? ActiveSession(id, scratchPath) : ActiveSession(id);
+         if (!session.empty())
          {
-            if (pSession->validate(userHomePath, projectSharingEnabled))
+            if (session.validate(userHomePath, projectSharingEnabled))
             {
-               sessions.push_back(pSession);
+               sessions.push_back(session);
             }
             else
             {
@@ -167,7 +169,7 @@ std::vector<boost::shared_ptr<ActiveSession> > ActiveSessions::list(
                // (they may be here as a result of a race condition where
                // they are removed but then suspended session data is
                // written back into them)
-               Error error = pSession->destroy();
+               Error error = session.destroy();
                if (error)
                   LOG_ERROR(error);
             }
@@ -179,8 +181,19 @@ std::vector<boost::shared_ptr<ActiveSession> > ActiveSessions::list(
    // sort by activity level (most active sessions first)
    std::sort(sessions.begin(), sessions.end(), compareActivityLevel);
 
+   // list to return
+   std::vector<boost::shared_ptr<ActiveSession> > sharedSessions;
+   std::transform(
+      sessions.begin(),
+      sessions.end(),
+      std::back_inserter(sharedSessions),
+      [](const ActiveSession& session)
+      {
+         return boost::shared_ptr<ActiveSession>(new ActiveSession(session));
+      });
+
    // return
-   return sessions;
+   return sharedSessions;
 }
 
 size_t ActiveSessions::count(const FilePath& userHomePath,
@@ -191,7 +204,7 @@ size_t ActiveSessions::count(const FilePath& userHomePath,
 
 boost::shared_ptr<ActiveSession> ActiveSessions::get(const std::string& id) const
 {
-   FilePath scratchPath = storagePath_.completeChildPath(kSessionDirPrefix + id);
+   FilePath scratchPath = getScratchPath(id);
    if (scratchPath.exists())
       return boost::shared_ptr<ActiveSession>(new ActiveSession(id,
                                                                 scratchPath));
@@ -199,13 +212,18 @@ boost::shared_ptr<ActiveSession> ActiveSessions::get(const std::string& id) cons
       return emptySession(id);
 }
 
-
 boost::shared_ptr<ActiveSession> ActiveSessions::emptySession(
       const std::string& id)
 {
    return boost::shared_ptr<ActiveSession>(new ActiveSession(id));
 }
 
+FilePath ActiveSessions::getScratchPath(const std::string& id) const
+{
+   return storagePath_.completeChildPath(kSessionDirPrefix + id);
+}
+
+// Start of GlobalActiveSessions =======================================================================================
 std::vector<boost::shared_ptr<GlobalActiveSession> >
 GlobalActiveSessions::list() const
 {

@@ -33,7 +33,7 @@ namespace rstudio {
 namespace core {
 namespace r_util {
 
-class ActiveSession : boost::noncopyable
+class ActiveSession
 {
 private:
    friend class ActiveSessions;
@@ -57,6 +57,43 @@ private:
    }
 
 public:
+
+   // This class needs to be copyable because we can't sort a vector of pointers without occasional segfaults.
+   ActiveSession(const ActiveSession& other) noexcept :
+      id_(other.id_), scratchPath_(other.scratchPath_), propertiesPath_(other.propertiesPath_)
+   {
+   }
+
+   ActiveSession(ActiveSession&& other) noexcept :
+      id_(std::move(other.id_)),
+      scratchPath_(std::move(other.scratchPath_)),
+      propertiesPath_(std::move(other.propertiesPath_))
+   {
+   }
+
+   ActiveSession& operator=(const ActiveSession& other) noexcept
+   {
+      if (this != &other)
+      {
+         id_ = other.id_;
+         scratchPath_ = other.scratchPath_;
+         propertiesPath_ = other.propertiesPath_;
+      }
+
+      return *this;
+   }
+
+   ActiveSession& operator=(ActiveSession&& other) noexcept
+   {
+      if (this != &other)
+      {
+         id_ = std::move(other.id_);
+         scratchPath_ = std::move(other.scratchPath_);
+         propertiesPath_ = std::move(other.propertiesPath_);
+      }
+
+      return *this;
+   }
 
    bool empty() const { return scratchPath_.isEmpty(); }
 
@@ -384,6 +421,8 @@ public:
    static boost::shared_ptr<ActiveSession> emptySession(const std::string& id);
 
 private:
+   FilePath getScratchPath(const std::string& id) const;
+
    core::FilePath storagePath_;
 };
 
